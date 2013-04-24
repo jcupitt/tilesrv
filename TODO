@@ -1,0 +1,27 @@
+- .svs files only have every other layer, eg:
+
+openslide.level[0].downsample: 1
+openslide.level[0].height: 47521
+openslide.level[0].tile-height: 240
+openslide.level[0].tile-width: 240
+openslide.level[0].width: 73029
+openslide.level[1].downsample: 4.0000694742978524
+openslide.level[1].height: 11880
+openslide.level[1].tile-height: 240
+openslide.level[1].tile-width: 240
+openslide.level[1].width: 18257
+openslide.level[2].downsample: 16.000716115286668
+openslide.level[2].height: 2970
+openslide.level[2].tile-height: 240
+openslide.level[2].tile-width: 240
+openslide.level[2].width: 4564
+
+$ header 044TracheaEsophCat.svs
+044TracheaEsophCat.svs: 73029x47521 uchar, 4 bands, rgb, openslideload
+$ header 044TracheaEsophCat.svs[level=1]
+044TracheaEsophCat.svs[level=1]: 18257x11880 uchar, 4 bands, rgb, openslideload
+$ header 044TracheaEsophCat.svs[level=2]
+044TracheaEsophCat.svs[level=2]: 4564x2970 uchar, 4 bands, rgb, openslideload
+
+  so we need to make the inbetween layers on the fly
+
