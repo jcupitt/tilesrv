@@ -1,4 +1,4 @@
-== tilesrv - simple fast-cgi tile server for deepzoom ==
+# tilesrv - simple fast-cgi tile server for deepzoom
 
 Dependencies:
 
