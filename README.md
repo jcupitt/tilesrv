@@ -52,3 +52,11 @@ Sample fcgi.conf:
   
 </IfModule>
 ```
+
+Then test with a URL like:
+
+```
+http://localhost/fcgi-bin/tilesrv.fcgi?filename=/home/john/pics/044TracheaEsophCat.svs&path=12/2_0.jpg
+```
+
+You'll need to set up mod_rewrite to get that to link to a deepzoom viewer.

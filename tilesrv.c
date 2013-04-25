@@ -5,8 +5,8 @@
 #define PACKAGE "tilesrv"
 
 /*
- */
 #define DEBUG
+ */
 
 /* No i18n for now.
  */
@@ -30,6 +30,7 @@
 #include <vips/vips.h>
 
 #ifdef DEBUG
+
 int loops = 2;
 #define FCGX_Accept_r(R) ((R)->out = fopen("output", "w"), (R)->err = stderr, loops--)
 #define FCGX_GetParam(A, B) \
@@ -50,6 +51,7 @@ typedef struct _DebugRequest {
 #endif
 
 #define TILE_SIZE (256)
+#define MAX_PYRAMIDS (10)
 
 /* A slice in the pyramid.
  *
@@ -116,13 +118,15 @@ lg( const char *fmt, ... )
 
 /* Free a pyramid.
  */
-static void
+static void *
 slice_free( Slice *slice )
 {
 	VIPS_FREE( slice->filename ); 
 	VIPS_FREEF( g_object_unref, slice->image );
 	VIPS_FREEF( slice_free, slice->below ); 
 	VIPS_FREE( slice ); 
+
+	return( NULL );
 }
 
 /* Build a pyramid. 
@@ -346,6 +350,7 @@ pyramid_from_file( const char *filename )
 		slice_free( pyramid );
 		return( NULL ); 
 	}
+	g_object_unref( image ); 
 
 	for( i = 1; i < n_levels; i++ ) {
 		VipsImage *level;
@@ -390,22 +395,63 @@ pyramid_from_file( const char *filename )
 	return( pyramid );
 }
 
+static GSList *current_pyramids = NULL; 
+
+static void
+pyramid_shutdown( void )
+{
+	vips_slist_map2( current_pyramids, 
+		(VipsSListMap2Fn) slice_free, NULL, NULL ); 
+	g_slist_free( current_pyramids ); 
+}
+
+static void *
+pyramid_find_sub( Slice *pyramid, const char *filename )
+{
+	if( strcmp( pyramid->filename, filename ) == 0 )
+		return( pyramid );
+
+	return( NULL );
+}
+
+static Slice *
+pyramid_find( const char *filename )
+{
+	Slice *pyramid;
+
+	if( (pyramid = (Slice *) vips_slist_map2( current_pyramids,
+		(VipsSListMap2Fn) pyramid_find_sub, 
+			(char *) filename, NULL )) ) {
+		current_pyramids = g_slist_remove( current_pyramids, pyramid );
+		current_pyramids = g_slist_append( current_pyramids, pyramid );
+		return( pyramid );
+	}
+
+	if( g_slist_length( current_pyramids ) > MAX_PYRAMIDS ) {
+		pyramid = (Slice *) current_pyramids->data; 
+		current_pyramids = g_slist_remove( current_pyramids, pyramid );
+		slice_free( pyramid );
+	}
+
+	if( !(pyramid = pyramid_from_file( filename )) )
+		return( NULL );
+
+	current_pyramids = g_slist_append( current_pyramids, pyramid );
+
+	return( pyramid );
+}
+
 static int
 serve_tile( FCGX_Stream *out, const char *filename, int n, int x, int y )
 {
-	static Slice *pyramid = NULL; 
-
+	Slice *pyramid;
 	Slice *p;
 	VipsImage *tile;
 	void *buf;
 	size_t len;
 
-	if( !pyramid ||
-		strcmp( filename, pyramid->filename ) != 0 ) {
-		VIPS_FREEF( slice_free, pyramid );
-		if( !(pyramid = pyramid_from_file( filename )) )
-			return( -1 );
-	}
+	if( !(pyramid = pyramid_find( filename )) )
+		return( -1 );
 
 	for( p = pyramid; p; p = p->below )
 		if( p->n == n )
@@ -628,6 +674,8 @@ main( int argc, char **argv )
 	}
 
 	FCGX_Finish_r( &request ); 
+
+	pyramid_shutdown();
 
 	return 0;
 }
