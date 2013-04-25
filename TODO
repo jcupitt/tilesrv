@@ -25,3 +25,26 @@ $ header 044TracheaEsophCat.svs[level=2]
 
   so we need to make the inbetween layers on the fly
 
+  also all the low-res layers
+
+- need a .dzi file like:
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Image xmlns="http://schemas.microsoft.com/deepzoom/2008"
+  Format="jpeg"
+  Overlap="1"
+  TileSize="256"
+  >
+  <Size 
+     Height="47521"
+     Width="73029"
+  />
+</Image>
+
+- copy pyramid skeleton build code from vips, link in layers we have from
+  .svs, build others on the fly
+
+- read whole of low-res layer to mem image for speed
+
+- drop alpha though
+
