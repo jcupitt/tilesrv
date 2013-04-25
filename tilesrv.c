@@ -5,8 +5,8 @@
 #define PACKAGE "tilesrv"
 
 /*
-#define DEBUG
  */
+#define DEBUG
 
 /* No i18n for now.
  */
@@ -105,6 +105,12 @@ lg( const char *fmt, ... )
 		vfprintf( log_fp, fmt, ap );
 		va_end( ap );
 		fflush( log_fp ); 
+
+#ifdef DEBUG
+		va_start( ap, fmt );
+		vprintf( fmt, ap );
+		va_end( ap );
+#endif
 	}
 }
 
@@ -184,9 +190,10 @@ open_image( const char *filename, int level )
  * the image slightly for rounding.
  */
 static int
-pyramid_insert_slice( Slice *slice, VipsImage *image, int cache )
+pyramid_insert_slice( Slice *slice, VipsImage *image, gboolean cache )
 {
-	VipsImage *t[2];
+	VipsImage *in;
+	VipsImage *x;
 
 #ifdef DEBUG
 	printf( "pyramid_insert_slice:\n" );
@@ -195,25 +202,33 @@ pyramid_insert_slice( Slice *slice, VipsImage *image, int cache )
 	printf( "\twidth = %d, height = %d\n", slice->width, slice->height );
 #endif
 
-	if( vips_embed( image, &t[0], 0, 0, slice->width, slice->height,
-		"extend", VIPS_EXTEND_COPY, NULL ) ) 
+	in = image;
+	g_object_ref( in );
+
+	if( vips_embed( in, &x, 0, 0, slice->width, slice->height,
+		"extend", VIPS_EXTEND_COPY, NULL ) ) {
+		g_object_unref( in ); 
 		return( -1 ); 
-	image = t[0];
+	}
+	g_object_unref( in ); 
+	in = x;
 
 	if( cache ||
 		(slice->width < 1000 && slice->height < 1000) ) {
-		if( vips_tilecache( image, &t[1], 
+		if( vips_tilecache( in, &x, 
 			"tile_width", TILE_SIZE, 
 			"tile_height", TILE_SIZE, 
 			"max_tiles", -1, 
+			"persistent", TRUE, 
 			NULL ) ) {
-			g_object_unref( image ); 
+			g_object_unref( in ); 
 			return( -1 ); 
 		}
-		image = t[1];
+		g_object_unref( in ); 
+		in = x;
 	}
 
-	slice->image = image;
+	slice->image = in;
 
 	return( 0 );
 }
@@ -524,6 +539,10 @@ main( int argc, char **argv )
 
 	int listen_socket = 0;
 
+#ifdef DEBUG
+	GTimer *query_timer = NULL;
+#endif
+
 	GError *error = NULL;
 
 	if( vips_init( argv[0] ) )
@@ -577,6 +596,12 @@ main( int argc, char **argv )
 
 		lg( "seen QUERY_STRING: %s\n", query );
 
+#ifdef DEBUG
+		if( !query_timer ) 
+			query_timer = g_timer_new();
+		g_timer_reset( query_timer );
+#endif
+
 		if( handle_query( request.out, query ) ) {
 			/* Don't give any details here for security.
 			 */
@@ -595,6 +620,11 @@ main( int argc, char **argv )
 
 			vips_error_clear();
 		}
+
+#ifdef DEBUG
+		printf( "query took: %gs\n",  
+			g_timer_elapsed( query_timer, NULL ) );
+#endif
 	}
 
 	FCGX_Finish_r( &request ); 
