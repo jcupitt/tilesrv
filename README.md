@@ -9,7 +9,7 @@ apt-get install fastcgi uriparser vips
 Compile with:
 
 ```bash
-gcc tilesrv.c \
+gcc -g -Wall tilesrv.c \
 	`pkg-config vips --cflags --libs` \
 	-lfcgi -luriparser \
 	-o tilesrv.fcgi

@@ -1,46 +1,12 @@
-/* Compile with:
- * 	gcc tilesrv.c \
- * 		`pkg-config vips --cflags --libs` \
- * 		-lfcgi -luriparser \
- * 		-o tilesrv.fcgi
- *
- * Then copy to:
- *	/usr/local/httpd/fcgi-bin
- *
- * You may need to create the logfile, eg.
- *
- * 	touch /tmp/tilesrv.log
- * 	chmod ugo+rw /tmp/tilesrv.log
- *
- * Sample fcgi.conf:
-
-<IfModule mod_fastcgi.c>
-  FastCgiIpcDir /var/lib/apache2/fastcgi
-
-  # Create a directory for the tilesrv binary
-  ScriptAlias /fcgi-bin/ "/usr/local/httpd/fcgi-bin/"
-
-  # Set the options on that directory
-  <Directory "/usr/local/httpd/fcgi-bin">
-     AllowOverride None
-     Options None
-     Order allow,deny
-     Allow from all
-  </Directory>
-
-  # Set the module handler
-  AddHandler fastcgi-script fcg fcgi fpl
-
-  # Initialise some variables for the FCGI server
-  FastCgiServer /usr/local/httpd/fcgi-bin/tilesrv.fcgi \
-    -initial-env LOGFILE=/tmp/tilesrv.log 
-  
-</IfModule>
- 
+/* simple deepzoom fastcgi tile server
  */
 
 #define VERSION "0.1"
 #define PACKAGE "tilesrv"
+
+/*
+#define DEBUG
+ */
 
 /* No i18n for now.
  */
@@ -63,7 +29,51 @@
 
 #include <vips/vips.h>
 
-#define TILE_SIZE (128)
+#ifdef DEBUG
+int loops = 2;
+#define FCGX_Accept_r(R) ((R)->out = fopen("output", "w"), (R)->err = stderr, loops--)
+#define FCGX_GetParam(A, B) \
+	("filename=/home/john/pics/044TracheaEsophCat.svs&path=4/0_0.jpg")
+#define FCGX_FPrintF fprintf
+#define FCGX_PutStr( B, L, F ) fwrite( B, L, 1, F )
+#define FCGX_InitRequest(A, B, C) (0)
+#define FCGX_Finish_r(C) (0)
+#define FCGX_Stream FILE
+#define FCGX_Request DebugRequest
+
+typedef struct _DebugRequest {
+	FILE *out;
+	FILE *err;
+	char **envp;
+} DebugRequest;
+
+#endif
+
+#define TILE_SIZE (256)
+
+/* A slice in the pyramid.
+ *
+ * openslide levels get slotted in where we have them, we downsample to make
+ * the missing slices. 
+ */
+typedef struct _Slice {
+	char *filename;
+
+	/* The image for this slice.
+	 */
+	VipsImage *image;
+
+	int width;
+	int height; 
+	int sub;			/* Subsample factor for this slice */
+	int n;				/* Slice number ... 0 for smallest */
+
+	/* Up and down the pyramid. above is the larger image, we shrink as we
+	 * go down. 
+	 */
+	struct _Slice *below;
+	struct _Slice *above;
+} Slice;
 
 char *option_listen_socket = NULL;
 char *option_log_filename = "/tmp/tilesrv.log";
@@ -98,41 +108,333 @@ lg( const char *fmt, ... )
 	}
 }
 
-static int
-serve_tile( FCGX_Stream *out, const char *image, int level, int x, int y )
+/* Free a pyramid.
+ */
+static void
+slice_free( Slice *slice )
 {
-	VipsImage *vim;
+	VIPS_FREE( slice->filename ); 
+	VIPS_FREEF( g_object_unref, slice->image );
+	VIPS_FREEF( slice_free, slice->below ); 
+	VIPS_FREE( slice ); 
+}
+
+/* Build a pyramid. 
+ */
+static Slice *
+pyramid_build( Slice *above, int width, int height )
+{
+	Slice *slice = VIPS_NEW( NULL, Slice );
+
+	slice->filename = NULL;
+	slice->image = NULL;
+	slice->width = width;
+	slice->height = height;
+
+	if( !above )
+		/* Top of pyramid.
+		 */
+		slice->sub = 1;	
+	else
+		slice->sub = above->sub * 2;
+
+	slice->below = NULL;
+	slice->above = above;
+
+	if( width > 1 || 
+		height > 1 ) {
+		/* Round up, so eg. a 5 pixel wide image becomes 3 a slice
+		 * down.
+		 */
+		slice->below = pyramid_build( slice, 
+			(width + 1) / 2, (height + 1) / 2 );
+		slice->n = slice->below->n + 1;
+	}
+	else
+		slice->n = 0;
+
+#ifdef DEBUG
+	printf( "pyramid_build:\n" );
+	printf( "\tn = %d\n", slice->n );
+	printf( "\twidth = %d, height = %d\n", width, height );
+#endif
+
+	return( slice );
+}
+
+/* Open a level in an openslide image. Drop the alpha while we're at it.
+ */
+static VipsImage *
+open_image( const char *filename, int level )
+{
+	VipsImage *t[2];
+
+	if( vips_openslideload( filename, &t[0], "level", level, NULL ) )
+		return( NULL );
+	if( vips_extract_band( t[0], &t[1], 0, "n", 3, NULL ) ) {
+		g_object_unref( t[0] );
+		return( NULL );
+	}
+	g_object_unref( t[0] );
+
+	return( t[1] );
+}
+
+/* Insert an image into a slice in the pyramid. We may need to expand 
+ * the image slightly for rounding.
+ */
+static int
+pyramid_insert_slice( Slice *slice, VipsImage *image, int cache )
+{
+	VipsImage *t[2];
+
+#ifdef DEBUG
+	printf( "pyramid_insert_slice:\n" );
+	printf( "\timage->Xsize = %d\n", image->Xsize );
+	printf( "\timage->Xsize = %d\n", image->Ysize );
+	printf( "\twidth = %d, height = %d\n", slice->width, slice->height );
+#endif
+
+	if( vips_embed( image, &t[0], 0, 0, slice->width, slice->height,
+		"extend", VIPS_EXTEND_COPY, NULL ) ) 
+		return( -1 ); 
+	image = t[0];
+
+	if( cache ||
+		(slice->width < 1000 && slice->height < 1000) ) {
+		if( vips_tilecache( image, &t[1], 
+			"tile_width", TILE_SIZE, 
+			"tile_height", TILE_SIZE, 
+			"max_tiles", -1, 
+			NULL ) ) {
+			g_object_unref( image ); 
+			return( -1 ); 
+		}
+		image = t[1];
+	}
+
+	slice->image = image;
+
+	return( 0 );
+}
+
+/* Search the pyramid for the right slice for an openslide level.
+ */
+static Slice *
+pyramid_find_slice( Slice *pyramid, VipsImage *level )
+{
+	char *str;
+	int slide_level;
+	char field_name[256];
+	int downsample;
+	Slice *p;
+
+	if( vips_image_get_int( level, "slide-level", &slide_level ) ) 
+		return( NULL ); 
+	vips_snprintf( field_name, 256, 
+		"openslide.level[%d].downsample", slide_level ); 
+	if( vips_image_get_string( level, field_name, &str ) ) 
+		return( NULL );
+	/* downsample can be eg. "4.000069474", we just want the int part.
+	 */
+	downsample = (int) (atof( str ));
+
+	for( p = pyramid; p; p = p->below )
+		if( p->sub == downsample )
+			break;
+	if( !p ) {
+		vips_error( PACKAGE, 
+			"downsample %d not in pyramid", downsample );
+		return( NULL );
+	}
+
+	return( p );
+}
+
+/* Make a slice, if it doesn't exist. Downsample the slice above.
+ */
+static int
+pyramid_create_slice( Slice *slice )
+{
+	VipsImage *in;
+	VipsImage *x;
+
+	/* Shrink will complain if the source has only 1 row or column. Expand
+	 * in this case.
+	 */
+	in = slice->above->image;
+	g_object_ref( in ); 
+
+	if( in->Xsize == 1 ||
+		in->Ysize == 1 ) {
+		if( vips_embed( in, &x, 0, 0, 
+			VIPS_MIN( 2, in->Xsize + 1 ), 
+			VIPS_MIN( 2, in->Ysize + 1 ), 
+			"extend", VIPS_EXTEND_COPY, NULL ) ) {
+			g_object_unref( in ); 
+			return( -1 );
+		}
+		g_object_unref( in ); 
+		in = x;
+	}
+
+	if( vips_shrink( in, &x, 2, 2, NULL ) ) {
+		g_object_unref( in ); 
+		return( -1 );
+	}
+	g_object_unref( in ); 
+	in = x;
+
+	if( pyramid_insert_slice( slice, in, FALSE ) ) {
+		g_object_unref( in );
+		return( -1 );
+	}
+	g_object_unref( in );
+
+	return( 0 );
+}
+
+/* Make a pyramid from an openslide file. 
+ */
+static Slice *
+pyramid_from_file( const char *filename )
+{
+	VipsImage *image;
+	Slice *pyramid;
+	char *str;
+	int n_levels;
+	int i;
+	Slice *p;
+
+#ifdef DEBUG
+	printf( "pyramid_from_file: %s\n", filename );
+#endif
+
+	if( !(image = open_image( filename, 0 )) ) 
+		return( NULL );
+	pyramid = pyramid_build( NULL, image->Xsize, image->Ysize );
+	pyramid->filename = g_strdup( filename );
+
+	if( vips_image_get_string( image, "openslide.level-count", &str ) ) {
+		slice_free( pyramid );
+		return( NULL ); 
+	}
+	n_levels = atoi( str );
+	if( n_levels < 1 ||
+		n_levels > 100 ) {
+		vips_error( PACKAGE, "bad levels in pyramid" );
+		slice_free( pyramid );
+		return( NULL ); 
+	}
+
+	if( pyramid_insert_slice( pyramid, image, FALSE ) ) {
+		slice_free( pyramid );
+		return( NULL ); 
+	}
+
+	for( i = 1; i < n_levels; i++ ) {
+		VipsImage *level;
+		gboolean cache;
+
+#ifdef DEBUG
+		printf( "pyramid_from_file: inserting level %d\n", i );
+#endif
+
+		if( !(level = open_image( filename, i )) ) {
+			slice_free( pyramid );
+			return( NULL ); 
+		}
+
+		/* We cache all the tiles in the lowest-res level, since they
+		 * will all be heavily used.
+		 */
+		cache = i == n_levels - 1;
+
+		if( !(p = pyramid_find_slice( pyramid, level )) ||
+			pyramid_insert_slice( p, level, cache ) ) { 
+			g_object_unref( level ); 
+			slice_free( pyramid );
+			return( NULL ); 
+		}
+		g_object_unref( level ); 
+	}
+
+	for( p = pyramid; p; p = p->below ) 
+		if( !p->image ) {
+#ifdef DEBUG
+			printf( "pyramid_from_file: creating level %d\n", 
+				p->n );
+#endif
+
+			if( pyramid_create_slice( p ) ) {
+				slice_free( pyramid );
+				return( NULL ); 
+			}
+		}
+
+	return( pyramid );
+}
+
+static int
+serve_tile( FCGX_Stream *out, const char *filename, int n, int x, int y )
+{
+	static Slice *pyramid = NULL; 
+
+	Slice *p;
 	VipsImage *tile;
 	void *buf;
 	size_t len;
 
-	if( vips_openslideload( image, &vim, "level", level, NULL ) ||
-		vips_extract_area( vim, &tile, 
-			x * TILE_SIZE, y * TILE_SIZE,
-			TILE_SIZE, TILE_SIZE, NULL ) ||
-		vips_jpegsave_buffer( tile, &buf, &len, "Q", 50, NULL ) )
-		return( -1 ); 
+	if( !pyramid ||
+		strcmp( filename, pyramid->filename ) != 0 ) {
+		VIPS_FREEF( slice_free, pyramid );
+		if( !(pyramid = pyramid_from_file( filename )) )
+			return( -1 );
+	}
 
-	FCGX_FPrintF( out, "Content-type: image/jpeg\r\n\r\n");
+	for( p = pyramid; p; p = p->below )
+		if( p->n == n )
+			break;
+	if( !p ) {
+		vips_error( PACKAGE, "layer not in pyramid" ); 
+		return( -1 );
+	}
+
+	if( vips_extract_area( p->image, &tile, 
+		x * TILE_SIZE, y * TILE_SIZE,
+		VIPS_MIN( p->image->Xsize - x * TILE_SIZE, TILE_SIZE ),
+		VIPS_MIN( p->image->Ysize - y * TILE_SIZE, TILE_SIZE ),
+		NULL ) ) 
+		return( -1 );
+	
+	if( vips_jpegsave_buffer( tile, &buf, &len, "Q", 50, NULL ) ) {
+		g_object_unref( tile );
+		return( -1 ); 
+	}
+
+	FCGX_FPrintF( out, "Content-length: %zd\r\n", len );
+	FCGX_FPrintF( out, "Content-type: image/jpeg\r\n");
+	FCGX_FPrintF( out, "\r\n");
 	FCGX_PutStr( buf, len, out );
 
 	g_free( buf ); 
+	g_object_unref( tile ); 
 
 	lg( "success: read tile %d x %d from level %d of image %s\n", 
-			x, y, level, image ); 
+		x, y, n, filename ); 
 
 	return( 0 );
 }
 
 static int
-process_request( FCGX_Stream *out, const char *image, const char *path )
+process_request( FCGX_Stream *out, const char *filename, const char *path )
 {
 	char *level_str;
 	char *tile_str;
 	int x, y;
-	int level;
+	int n;
 
-	lg( "processing image = %s, path = %s\n", image, path );
+	lg( "processing filename = %s, path = %s\n", filename, path );
 
 	/* Tiles are named as eg. "6/3_7.jpg", meaning level 6, tile 3 x 7.
 	 */
@@ -140,7 +442,7 @@ process_request( FCGX_Stream *out, const char *image, const char *path )
 	level_str = g_path_get_dirname( path );
 
 	if( sscanf( tile_str, "%d_%d.jpg", &x, &y ) != 2 ||
-		sscanf( level_str, "%d", &level ) != 1 ) {
+		sscanf( level_str, "%d", &n ) != 1 ) {
 		lg( "unable to parse x_y.jpg from %s\n", tile_str );
 		lg( "unable to parse level from %s\n", level_str );
 		g_free( tile_str );
@@ -150,14 +452,14 @@ process_request( FCGX_Stream *out, const char *image, const char *path )
 
 	if( x < 0 || x > 100000 ||
 		y < 0 || y > 100000 ||
-		level < 0 || level > 100000 ) {
-		lg( "level/x/y out of range\n" ); 
+		n < 0 || n > 100000 ) {
+		lg( "n/x/y out of range\n" ); 
 		g_free( tile_str );
 		g_free( level_str );
 		return( -1 );
 	}
 
-	if( serve_tile( out, image, level, x, y ) ) {
+	if( serve_tile( out, filename, n, x, y ) ) {
 		g_free( tile_str );
 		g_free( level_str );
 		return( -1 );
@@ -172,11 +474,10 @@ process_request( FCGX_Stream *out, const char *image, const char *path )
 static int
 handle_query( FCGX_Stream *out, const char *query )
 {
-	UriUriA uri;
 	UriQueryListA *query_list;
 	UriQueryListA *p;
 	int count;
-	const char *image;
+	const char *filename;
 	const char *path;
 
 	if( uriDissectQueryMallocA( &query_list, &count, 
@@ -185,26 +486,26 @@ handle_query( FCGX_Stream *out, const char *query )
 		return( -1 );
 	}
 
-	image = NULL;
+	filename = NULL;
 	path = NULL;
 
 	for( p = query_list; p; p = p->next ) { 
 		if( p->value &&
-			strcmp( p->key, "image" ) == 0 ) 
-			image = p->value;
+			strcmp( p->key, "filename" ) == 0 ) 
+			filename = p->value;
 		if( p->value &&
 			strcmp( p->key, "path" ) == 0 ) 
 			path = p->value;
 	}
 
-	if( !image || 
+	if( !filename || 
 		!path ) {
 		vips_error( PACKAGE, "unable to parse query" ); 
 		uriFreeQueryListA( query_list );
 		return( -1 );
 	}
 
-	if( process_request( out, image, path ) ) {
+	if( process_request( out, filename, path ) ) {
 		uriFreeQueryListA( query_list );
 		return( -1 ); 
 	}
@@ -219,7 +520,6 @@ main( int argc, char **argv )
 {
 	GOptionContext *context;
 	GOptionGroup *main_group;
-	GOptionGroup *group;
 	FCGX_Request request;
 
 	int listen_socket = 0;
