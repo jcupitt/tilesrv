@@ -120,3 +120,25 @@ for i in $*; do
 EOF
 done
 ```
+
+## Cross-compiling
+
+Cross-compile from linux to Windows with:
+
+```bash
+i686-w64-mingw32-gcc \
+	-mms-bitfields -march=i686 \
+	-I/home/john/GIT/build-win32/7.32/inst/include \
+	-I/home/john/GIT/build-win32/7.32/inst/include/glib-2.0 \
+	-I/home/john/GIT/build-win32/7.32/inst/lib/glib-2.0/include \
+	tilesrv.c \
+	-L/home/john/GIT/build-win32/7.32/inst/lib \
+	-lvips -lz -ljpeg -lstdc++ -lxml2 -lfftw3 -lm -lMagickWand -llcms2 \
+	-lopenslide -lcfitsio -lpangoft2-1.0 -ltiff -lpng14 -lexif \
+	-lMagickCore -lpango-1.0 -lfreetype -lfontconfig -lgobject-2.0 \
+	-lgmodule-2.0 -lgthread-2.0 -lglib-2.0 -lintl \
+	-lfcgi -luriparser \
+	-o tilesrv.fcgi
+```
+
+Or taht's what seems to work for me, anyway. 

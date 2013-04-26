@@ -13,7 +13,7 @@
 #define N_(A) (A)
 #define _(A) (A)
 #define GETTEXT_PACKAGE PACKAGE
-#include <libintl.h>
+//#include <libintl.h>
 #include <locale.h>
 
 #include <stdio.h>
