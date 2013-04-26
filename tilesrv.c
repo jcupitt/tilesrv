@@ -34,7 +34,7 @@
 int loops = 2;
 #define FCGX_Accept_r(R) ((R)->out = fopen("output", "w"), (R)->err = stderr, loops--)
 #define FCGX_GetParam(A, B) \
-	("filename=/home/john/pics/044TracheaEsophCat.svs&path=4/0_0.jpg")
+	("filename=/home/john/pics/044TracheaEsophCat.svs&path=4/0_0.jpeg")
 #define FCGX_FPrintF fprintf
 #define FCGX_PutStr( B, L, F ) fwrite( B, L, 1, F )
 #define FCGX_InitRequest(A, B, C) (0)
@@ -497,14 +497,14 @@ process_request( FCGX_Stream *out, const char *filename, const char *path )
 
 	lg( "processing filename = %s, path = %s\n", filename, path );
 
-	/* Tiles are named as eg. "6/3_7.jpg", meaning level 6, tile 3 x 7.
+	/* Tiles are named as eg. "6/3_7.jpeg", meaning level 6, tile 3 x 7.
 	 */
 	tile_str = g_path_get_basename( path );
 	level_str = g_path_get_dirname( path );
 
-	if( sscanf( tile_str, "%d_%d.jpg", &x, &y ) != 2 ||
+	if( sscanf( tile_str, "%d_%d.jpeg", &x, &y ) != 2 ||
 		sscanf( level_str, "%d", &n ) != 1 ) {
-		lg( "unable to parse x_y.jpg from %s\n", tile_str );
+		lg( "unable to parse x_y.jpeg from %s\n", tile_str );
 		lg( "unable to parse level from %s\n", level_str );
 		g_free( tile_str );
 		g_free( level_str );

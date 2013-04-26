@@ -1,10 +1,35 @@
 # tilesrv - simple fast-cgi tile server for deepzoom
 
-Dependencies:
+This is a tiny fastcgi DeepZoom tile server for image files which can be read 
+by [openslide](http://openslide.org/). 
+
+If you need viewing to be quick you should process your slides with a
+proper DeepZoom converter. These programs take a virtual slide and create a
+large pyramid of jpeg tiles which can then be sent by any webserver to the
+viewer.
+
+This conversion can be slow, perhaps 10 minutes per slide. If you have
+many thousands of slides and not many users it might be easier to create the
+jpeg tiles on the fly as viewers request them. That's what this program does.
+
+It takes about 2s to open and prepare a typical image file, but then viewing
+is relatively quick. You should be able to support up to about 10 
+simultaneous users on a basic server. 
+
+Openslide have a program in Python which does this same task, see the
+examples/ directory in openslide-python. It does not include a fastcgi
+interface though. 
+
+## Dependencies
 
 ```bash
-apt-get install fastcgi uriparser vips
+apt-get install fastcgi uriparser libvips
 ```
+
+This program needs libvips 7.32.3 or later. You may need to build
+from source if your distribution does not have it. 
+
+## Install
 
 Compile with:
 
@@ -15,7 +40,7 @@ gcc -g -Wall tilesrv.c \
 	-o tilesrv.fcgi
 ```
 
-Then copy to:
+Copy to:
 
 /usr/local/httpd/fcgi-bin
 
@@ -56,7 +81,42 @@ Sample fcgi.conf:
 Then test with a URL like:
 
 ```
-http://localhost/fcgi-bin/tilesrv.fcgi?filename=/home/john/pics/044TracheaEsophCat.svs&path=12/2_0.jpg
+http://localhost/fcgi-bin/tilesrv.fcgi?filename=/home/john/pics/044.svs&path=12/2_0.jpg
 ```
 
-You'll need to set up mod_rewrite to get that to link to a deepzoom viewer.
+You'll need to use something like
+[mod_rewrite](http://httpd.apache.org/docs/current/mod/mod_rewrite.html) to
+make those from DeepZoom tile references, which are usually something like:
+
+```
+http://localhost/pics/044_files/12/2_0.jpg
+```
+
+You'll also need to make a .dzi file for each image. You can use a shell script
+to do this, something like:
+
+```bash
+#!/bin/bash
+
+for i in $*; do
+  out=$(dirname $i)/$(basename $i .svs).dzi
+
+  width=$(header $i -f Xsize)
+  height=$(header $i -f Ysize)
+
+  cat >$out << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<Image
+  xmlns="http://schemas.microsoft.com/deepzoom/2008"
+  Format="jpeg"
+  Overlap="0"
+  TileSize="256"
+  >
+  <Size
+    Height="$width"
+    Width="$height"
+  />
+</Image>
+EOF
+done
+```

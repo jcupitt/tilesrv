@@ -1,1 +1,3 @@
-- seems to work!
+- persistent cache of a few tiles in every layer
+
+- add some env vars to control cache behaviour
