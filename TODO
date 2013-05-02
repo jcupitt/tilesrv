@@ -1,1 +1,7 @@
 - add some env vars to control cache behaviour
+
+- we assume image levels are powers of two, barring rounding errors ... this
+  will not be true for all openslide-supported formats
+
+  instead, we should pick the closest slice and (if necessary) stretch the
+  image to fit
