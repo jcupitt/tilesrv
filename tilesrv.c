@@ -194,10 +194,11 @@ open_image( const char *filename, int level )
  * the image slightly for rounding.
  */
 static int
-pyramid_insert_slice( Slice *slice, VipsImage *image, gboolean cache )
+pyramid_insert_slice( Slice *slice, VipsImage *image )
 {
 	VipsImage *in;
 	VipsImage *x;
+	int max_tiles;
 
 #ifdef DEBUG
 	printf( "pyramid_insert_slice:\n" );
@@ -217,20 +218,22 @@ pyramid_insert_slice( Slice *slice, VipsImage *image, gboolean cache )
 	g_object_unref( in ); 
 	in = x;
 
-	if( cache ||
-		(slice->width < 1000 && slice->height < 1000) ) {
-		if( vips_tilecache( in, &x, 
-			"tile_width", TILE_SIZE, 
-			"tile_height", TILE_SIZE, 
-			"max_tiles", -1, 
-			"persistent", TRUE, 
-			NULL ) ) {
-			g_object_unref( in ); 
-			return( -1 ); 
-		}
+	/* We cache enough tiles in each layer to be able to paint a 1920 x
+	 * 1080 desktop, plus a bit.
+	 */
+	max_tiles = (3 + 1920 / TILE_SIZE) * (3 + 1080 / TILE_SIZE);
+
+	if( vips_tilecache( in, &x, 
+		"tile_width", TILE_SIZE, 
+		"tile_height", TILE_SIZE, 
+		"max_tiles", max_tiles, 
+		"persistent", TRUE, 
+		NULL ) ) {
 		g_object_unref( in ); 
-		in = x;
+		return( -1 ); 
 	}
+	g_object_unref( in ); 
+	in = x;
 
 	slice->image = in;
 
@@ -304,7 +307,7 @@ pyramid_create_slice( Slice *slice )
 	g_object_unref( in ); 
 	in = x;
 
-	if( pyramid_insert_slice( slice, in, FALSE ) ) {
+	if( pyramid_insert_slice( slice, in ) ) {
 		g_object_unref( in );
 		return( -1 );
 	}
@@ -346,7 +349,7 @@ pyramid_from_file( const char *filename )
 		return( NULL ); 
 	}
 
-	if( pyramid_insert_slice( pyramid, image, FALSE ) ) {
+	if( pyramid_insert_slice( pyramid, image ) ) {
 		slice_free( pyramid );
 		return( NULL ); 
 	}
@@ -354,7 +357,6 @@ pyramid_from_file( const char *filename )
 
 	for( i = 1; i < n_levels; i++ ) {
 		VipsImage *level;
-		gboolean cache;
 
 #ifdef DEBUG
 		printf( "pyramid_from_file: inserting level %d\n", i );
@@ -365,13 +367,8 @@ pyramid_from_file( const char *filename )
 			return( NULL ); 
 		}
 
-		/* We cache all the tiles in the lowest-res level, since they
-		 * will all be heavily used.
-		 */
-		cache = i == n_levels - 1;
-
 		if( !(p = pyramid_find_slice( pyramid, level )) ||
-			pyramid_insert_slice( p, level, cache ) ) { 
+			pyramid_insert_slice( p, level ) ) { 
 			g_object_unref( level ); 
 			slice_free( pyramid );
 			return( NULL ); 
