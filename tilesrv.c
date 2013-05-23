@@ -87,7 +87,7 @@ static GOptionEntry option_list[] = {
 		N_( "listen on SOCKET" ), 
 		N_( "SOCKET" ) },
 	{ "log", 'l', 0, G_OPTION_ARG_FILENAME, &option_log_filename, 
-		N_( "log to FILENAME" ), 
+		N_( "log to FILENAME, - for no log" ), 
 		N_( "FILENAME" ) },
 	{ "version", 'v', 0, G_OPTION_ARG_NONE, &option_version, 
 		N_( "print version" ), NULL },
@@ -620,6 +620,7 @@ main( int argc, char **argv )
 		vips_error_exit( _( "unable to init fcgx" ) ); 
 
 	if( option_log_filename &&
+		strcmp( option_log_filename, "-" ) != 0 && 
 		!(log_fp = fopen( option_log_filename, "a" )) ) 
 		vips_error_exit( _( "unable to append to %s" ), 
 			option_log_filename ); 

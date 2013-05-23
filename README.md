@@ -23,7 +23,7 @@ interface though.
 ## Dependencies
 
 ```bash
-apt-get install fastcgi uriparser libvips
+apt-get install libfcgi-dev liburiparser-dev libvips-dev
 ```
 
 This program needs libvips 7.32.3 or later. You may need to build
@@ -141,4 +141,4 @@ i686-w64-mingw32-gcc \
 	-o tilesrv.fcgi
 ```
 
-Or taht's what seems to work for me, anyway. 
+Or that's what seems to work for me, anyway. 
