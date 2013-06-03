@@ -72,8 +72,9 @@ Sample fcgi.conf:
   AddHandler fastcgi-script fcg fcgi fpl
 
   # Initialise some variables for the FCGI server
+  # you can also set TILESRV_LISTEN to set the listen socket
   FastCgiServer /usr/local/httpd/fcgi-bin/tilesrv.fcgi \
-    -initial-env LOGFILE=/tmp/tilesrv.log 
+    -initial-env TILESRV_LOGFILE=/tmp/tilesrv.log 
   
 </IfModule>
 ```

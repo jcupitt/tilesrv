@@ -581,6 +581,7 @@ main( int argc, char **argv )
 	FCGX_Request request;
 
 	int listen_socket = 0;
+	const char *str;
 
 #ifdef DEBUG
 	GTimer *query_timer = NULL;
@@ -612,6 +613,11 @@ main( int argc, char **argv )
 
 		vips_error_exit( NULL );
 	}
+
+	if( (str = g_getenv( "TILESRV_LOGFILE" )) )
+		option_log_filename = g_strdup( str ); 
+	if( (str = g_getenv( "TILESRV_LISTEN" )) )
+		option_listen_socket = g_strdup( str ); 
 
 	if( option_version )
 		vips_error_exit( VERSION ); 
